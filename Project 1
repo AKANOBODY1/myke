@@ -1,0 +1,233 @@
+import requests
+from bs4 import BeautifulSoup
+import yfinance as yf
+import matplotlib.pyplot as plt
+from flask import Flask, render_template
+import pandas as pd
+from datetime import datetime, timedelta
+import os
+
+# URLs of the FRED data pages
+urls_market = {
+    'GDP': 'https://fred.stlouisfed.org/series/GDP',
+    'Unemployment Rate': 'https://fred.stlouisfed.org/series/UNRATE',
+    'Population': 'https://fred.stlouisfed.org/series/POP',
+    'Total Nonfarm Payrolls': 'https://fred.stlouisfed.org/series/PAYEMS',
+    'Initial Claims': 'https://fred.stlouisfed.org/series/ICSA',
+    'CPI': 'https://fred.stlouisfed.org/series/CPIAUCSL',
+    'Federal Funds Rate': 'https://fred.stlouisfed.org/series/FEDFUNDS',
+    'Wealth Top 1%': 'https://fred.stlouisfed.org/series/WFRBST01134'
+}
+
+urls_labor_market = {
+    'Job Openings': 'https://fred.stlouisfed.org/series/JTSJOL',
+    'Hires': 'https://fred.stlouisfed.org/series/JTSHIL',
+    'Total Separations': 'https://fred.stlouisfed.org/series/JTSTSL',
+    'Quits': 'https://fred.stlouisfed.org/series/JTSQUL',
+    'Layoffs and Discharges': 'https://fred.stlouisfed.org/series/JTSLDL',
+    'Other Separations': 'https://fred.stlouisfed.org/series/JTSOSL'
+}
+
+urls_bond_market = {
+    '2-Year Treasury Yield': 'https://fred.stlouisfed.org/series/DGS2',
+    '5-Year Treasury Yield': 'https://fred.stlouisfed.org/series/DGS5',
+    '10-Year Treasury Yield': 'https://fred.stlouisfed.org/series/DGS10',
+    '30-Year Treasury Yield': 'https://fred.stlouisfed.org/series/DGS30'
+}
+
+# Function to scrape data from FRED
+def scrape_fred_data(url):
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    value = soup.find('span', class_='series-meta-observation-value').text.strip()
+    return value
+
+def get_stock_data(symbol, start_date, end_date):
+    try:
+        stock_data = yf.download(symbol, start=start_date, end=end_date)
+        return stock_data
+    except Exception as e:
+        print(f"Error fetching data for {symbol}: {e}")
+        return None
+
+def calculate_change_percentage(stock_df):
+    if stock_df.empty:
+        return None
+    change_percentage = ((stock_df["Adj Close"].iloc[-1] - stock_df["Adj Close"].iloc[0]) / stock_df["Adj Close"].iloc[0]) * 100
+    return change_percentage
+
+def get_advisor_recommendation(stock_df, vix):
+    if stock_df.empty:
+        return "No data available."
+
+    change_percentage = calculate_change_percentage(stock_df)
+    volatility = stock_df["Adj Close"].pct_change().std()
+
+    if change_percentage > 0 and volatility < vix:
+        recommendation = "Buy"
+    elif change_percentage > 0 and volatility >= vix:
+        recommendation = "Potential Buy"
+    elif change_percentage < 0 and volatility < vix:
+        recommendation = "Short"
+    else:
+        recommendation = "Potential Short"
+
+    return f"Change Percentage: {change_percentage:.2f}%, Recommendation: {recommendation}"
+
+def generate_qqq_chart():
+    # Fetch QQQ data
+    qqq = yf.download('QQQ', start='2023-01-01', end='2023-12-31')
+
+    # Plot the QQQ data
+    plt.figure(figsize=(10, 5))
+    plt.plot(qqq['Close'], label='QQQ', color='red')
+    plt.title('QQQ Price Chart', color='white')
+    plt.xlabel('Date', color='white')
+    plt.ylabel('Price', color='white')
+    plt.legend()
+    plt.grid(True)
+    plt.gca().set_facecolor('black')
+    plt.gcf().set_facecolor('black')
+
+    # Ensure the static directory exists
+    static_dir = os.path.join(os.path.dirname(__file__), 'static')
+    if not os.path.exists(static_dir):
+        os.makedirs(static_dir)
+
+    plt.savefig(os.path.join(static_dir, 'qqq_chart.png'), bbox_inches='tight')
+    plt.close()
+
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    # Generate QQQ chart
+    generate_qqq_chart()
+
+    # Scrape FRED data for The Market
+    fred_data_market = {series_name: scrape_fred_data(url) for series_name, url in urls_market.items()}
+    # Scrape FRED data for Labor Market Conditions
+    fred_data_labor_market = {series_name: scrape_fred_data(url) for series_name, url in urls_labor_market.items()}
+    # Scrape FRED data for Bond Market Conditions
+    fred_data_bond_market = {series_name: scrape_fred_data(url) for series_name, url in urls_bond_market.items()}
+
+    # Define stocks_and_sectors
+    stocks_and_sectors = {
+        "S&P 500": "^GSPC",
+        "QQQ": "QQQ",
+        "TQQQ": "TQQQ",
+        "SQQQ": "SQQQ",
+        "XLK": "XLK",
+        "XLV": "XLV",
+        "XLF": "XLF",
+        "XLY": "XLY",
+        "XLC": "XLC",
+        "XLI": "XLI",
+        "XLP": "XLP",
+        "XLE": "XLE",
+        "XLU": "XLU",
+        "XLB": "XLB",
+        "XLRE": "XLRE",
+        "Gold": "GC=F",  # Gold futures
+        "Crude Oil": "CL=F",  # Crude oil futures
+        "Copper": "HG=F",  # Copper futures
+        "2-Year Treasury Yield": "^TNX",  # 2-year US Treasury yield
+        "10-Year Treasury Yield": "^TNX",  # 10-year US Treasury yield
+        "30-Year Treasury Yield": "^TYX",  # 30-year US Treasury yield
+        "VIX": "^VIX",  # CBOE Volatility Index (VIX)",
+        "Ecolab Inc.": "ECL",
+        "Dow Inc": "DOW",
+        "Air Products and Chemicals, Inc.": "APD",
+        "Sherwin-Williams Company": "SHW",
+        "PPG Industries, Inc.": "PPG",
+        "Honeywell International Inc.": "HON",
+        "United Parcel Service, Inc.": "UPS",
+        "3M Company": "MMM",
+        "Caterpillar Inc.": "CAT",
+        "Lockheed Martin Corporation": "LMT",
+        "JPMorgan Chase & Co.": "JPM",
+        "Bank of America Corporation": "BAC",
+        "Wells Fargo & Company": "WFC",
+        "Goldman Sachs Group, Inc.": "GS",
+        "Morgan Stanley": "MS",
+        "Exxon Mobil Corporation": "XOM",
+        "Chevron Corporation": "CVX",
+        "ConocoPhillips": "COP",
+        "Schlumberger Limited": "SLB",
+        "Phillips 66": "PSX",
+        "Amazon.com Inc.": "AMZN",
+        "The Walt Disney Company": "DIS",
+        "Nike, Inc.": "NKE",
+        "Home Depot, Inc.": "HD",
+        "Booking Holdings Inc.": "BKNG",
+        "Apple Inc.": "AAPL",
+        "Microsoft Corporation": "MSFT",
+        "Alphabet Inc.": "GOOGL",
+        "Facebook, Inc.": "meta",
+        "NVIDIA Corporation": "NVDA",
+        "Netflix, Inc.": "NFLX",
+        "Verizon Communications Inc.": "VZ",
+        "Johnson & Johnson": "JNJ",
+        "Pfizer Inc.": "PFE",
+        "Merck & Co., Inc.": "MRK",
+        "Abbott Laboratories": "ABT",
+        "UnitedHealth Group Incorporated": "UNH",
+        "Procter & Gamble Co.": "PG",
+        "The Coca-Cola Company": "KO",
+        "PepsiCo, Inc.": "PEP",
+        "Colgate-Palmolive Company": "CL",
+        "Philip Morris International Inc.": "PM",
+        "NextEra Energy Inc.": "NEE",
+        "Duke Energy Corporation": "DUK",
+        "Dominion Energy, Inc.": "D",
+        "Southern Company": "SO",
+        "American Electric Power Company, Inc.": "AEP",
+        "American Tower Corporation": "AMT",
+        "Simon Property Group, Inc.": "SPG",
+        "Equinix, Inc.": "EQIX",
+        "Prologis, Inc.": "PLD",
+        "AvalonBay Communities, Inc.": "AVB"
+    }
+
+    # Adjust the date range for the past 5 days
+    end_date = pd.Timestamp.today().strftime('%Y-%m-%d')
+    start_date = (pd.Timestamp.today() - pd.DateOffset(days=4)).strftime('%Y-%m-%d')
+
+    # Get VIX data (for simplicity, using a fixed value here)
+    vix = 0.02
+
+    # Initialize lists to store stock data and recommendations
+    stock_data = {}
+    recommendations = {}
+    overall_volatility = 0
+
+    for name, symbol in stocks_and_sectors.items():
+        stock_df = get_stock_data(symbol, start_date, end_date)
+        if stock_df is not None:
+            stock_data[name] = stock_df
+            recommendations[name] = get_advisor_recommendation(stock_df, vix)
+            overall_volatility += stock_df["Adj Close"].pct_change().std()
+
+    # Calculate average volatility
+    overall_volatility /= len(stocks_and_sectors)
+
+    # Sort recommendations by change percentage
+    sorted_recommendations = sorted(recommendations.items(), key=lambda x: calculate_change_percentage(stock_data[x[0]]), reverse=True)
+
+    # Select top 3 to buy and top 3 to short
+    top_3_buy = sorted_recommendations[:3]
+    top_3_short = sorted_recommendations[-3:]
+
+    # Combine top 3 buy and short into a single list
+    top_3_combined = top_3_buy + top_3_short
+
+    return render_template("AWRTerminal.html", 
+                           fred_data_market=fred_data_market, 
+                           fred_data_labor_market=fred_data_labor_market, 
+                           fred_data_bond_market=fred_data_bond_market,
+                           top_3_combined=top_3_combined)
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
